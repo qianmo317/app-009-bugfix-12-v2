@@ -199,8 +199,10 @@ export default function CanvasGrid() {
     newCells[idx] = colorIdx;
 
     if (tool === 'mirror') {
-      const mirrored = mirrorAxis === 'vertical' ? col : row;
-      const midx = row * c.cols + mirrored;
+      // vertical axis = left/right mirror, horizontal axis = top/bottom mirror
+      const mCol = mirrorAxis === 'vertical' ? c.cols - 1 - col : col;
+      const mRow = mirrorAxis === 'vertical' ? row : c.rows - 1 - row;
+      const midx = mRow * c.cols + mCol;
       if (midx >= 0 && midx < newCells.length) newCells[midx] = colorIdx;
     }
 
@@ -232,10 +234,22 @@ export default function CanvasGrid() {
 
   const drawLine = (c: Chart, x0: number, y0: number, x1: number, y1: number, colorIdx: number) => {
     const newCells = currentCellsRef.current ? new Uint16Array(currentCellsRef.current) : new Uint16Array(c.cells);
-    const first = y0 * c.cols + x0;
-    if (first >= 0 && first < newCells.length) newCells[first] = colorIdx;
-    const last = y1 * c.cols + x1;
-    if (last >= 0 && last < newCells.length) newCells[last] = colorIdx;
+    // Bresenham: paint every cell along the line, not just the endpoints
+    let cx = x0;
+    let cy = y0;
+    const dx = Math.abs(x1 - x0);
+    const dy = Math.abs(y1 - y0);
+    const sx = x0 < x1 ? 1 : -1;
+    const sy = y0 < y1 ? 1 : -1;
+    let err = dx - dy;
+    for (;;) {
+      const idx = cy * c.cols + cx;
+      if (idx >= 0 && idx < newCells.length) newCells[idx] = colorIdx;
+      if (cx === x1 && cy === y1) break;
+      const e2 = 2 * err;
+      if (e2 > -dy) { err -= dy; cx += sx; }
+      if (e2 < dx) { err += dx; cy += sy; }
+    }
     return newCells;
   };
 
@@ -246,17 +260,12 @@ export default function CanvasGrid() {
     const minY = Math.min(y0, y1);
     const maxY = Math.max(y0, y1);
 
-    for (let x = minX; x <= maxX; x++) {
-      const top = minY * c.cols + x;
-      if (top >= 0 && top < newCells.length) newCells[top] = colorIdx;
-      const bottom = maxY * c.cols + x;
-      if (bottom >= 0 && bottom < newCells.length) newCells[bottom] = colorIdx;
-    }
+    // Fill the whole rect, border and interior
     for (let y = minY; y <= maxY; y++) {
-      const left = y * c.cols + minX;
-      if (left >= 0 && left < newCells.length) newCells[left] = colorIdx;
-      const right = y * c.cols + maxX;
-      if (right >= 0 && right < newCells.length) newCells[right] = colorIdx;
+      for (let x = minX; x <= maxX; x++) {
+        const idx = y * c.cols + x;
+        if (idx >= 0 && idx < newCells.length) newCells[idx] = colorIdx;
+      }
     }
     return newCells;
   };
