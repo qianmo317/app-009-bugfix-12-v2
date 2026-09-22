@@ -1,8 +1,52 @@
 import { useRef, useEffect, useCallback } from 'react';
 import { useChartStore } from '../store/chartStore';
-import type { Chart, Point, Rect } from '../types';
+import type { Chart, Point } from '../types';
 
 const BASE_CELL = 20;
+
+function getLineCells(x0: number, y0: number, x1: number, y1: number): Point[] {
+  const cells: Point[] = [];
+  const dx = Math.abs(x1 - x0);
+  const dy = Math.abs(y1 - y0);
+  const sx = x0 < x1 ? 1 : -1;
+  const sy = y0 < y1 ? 1 : -1;
+  let error = dx - dy;
+  let x = x0;
+  let y = y0;
+
+  while (true) {
+    cells.push({ x, y });
+    if (x === x1 && y === y1) break;
+
+    const error2 = error * 2;
+    if (error2 > -dy) {
+      error -= dy;
+      x += sx;
+    }
+    if (error2 < dx) {
+      error += dx;
+      y += sy;
+    }
+  }
+
+  return cells;
+}
+
+function getRectCells(x0: number, y0: number, x1: number, y1: number): Point[] {
+  const cells: Point[] = [];
+  const minX = Math.min(x0, x1);
+  const maxX = Math.max(x0, x1);
+  const minY = Math.min(y0, y1);
+  const maxY = Math.max(y0, y1);
+
+  for (let y = minY; y <= maxY; y++) {
+    for (let x = minX; x <= maxX; x++) {
+      cells.push({ x, y });
+    }
+  }
+
+  return cells;
+}
 
 export default function CanvasGrid() {
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -34,7 +78,7 @@ export default function CanvasGrid() {
 
   const drawingRef = useRef(false);
   const startCellRef = useRef<Point | null>(null);
-  const previewRef = useRef<Rect | null>(null);
+  const previewCellsRef = useRef<Point[]>([]);
   const currentCellsRef = useRef<Uint16Array | null>(null);
   const rafRef = useRef<number>(0);
   const needsRedrawRef = useRef(true);
@@ -153,14 +197,15 @@ export default function CanvasGrid() {
       }
     }
 
-    // Selection preview
-    if (previewRef.current) {
-      const pr = previewRef.current;
-      ctx.strokeStyle = '#3498db';
-      ctx.lineWidth = 2;
-      ctx.setLineDash([4, 2]);
-      ctx.strokeRect(pr.x * cellSize, pr.y * cellSize, pr.w * cellSize, pr.h * cellSize);
-      ctx.setLineDash([]);
+    // Shape preview
+    if (previewCellsRef.current.length > 0) {
+      const previewColor = c.palette[st.selectedColorIndex]?.hex ?? '#e74c3c';
+      ctx.globalAlpha = 0.55;
+      ctx.fillStyle = previewColor;
+      for (const cell of previewCellsRef.current) {
+        ctx.fillRect(cell.x * cellSize, cell.y * cellSize, cellSize, cellSize);
+      }
+      ctx.globalAlpha = 1;
     }
 
     // Selection rect
@@ -199,8 +244,9 @@ export default function CanvasGrid() {
     newCells[idx] = colorIdx;
 
     if (tool === 'mirror') {
-      const mirrored = mirrorAxis === 'vertical' ? col : row;
-      const midx = row * c.cols + mirrored;
+      const mirroredCol = mirrorAxis === 'vertical' ? c.cols - 1 - col : col;
+      const mirroredRow = mirrorAxis === 'horizontal' ? c.rows - 1 - row : row;
+      const midx = mirroredRow * c.cols + mirroredCol;
       if (midx >= 0 && midx < newCells.length) newCells[midx] = colorIdx;
     }
 
@@ -232,31 +278,18 @@ export default function CanvasGrid() {
 
   const drawLine = (c: Chart, x0: number, y0: number, x1: number, y1: number, colorIdx: number) => {
     const newCells = currentCellsRef.current ? new Uint16Array(currentCellsRef.current) : new Uint16Array(c.cells);
-    const first = y0 * c.cols + x0;
-    if (first >= 0 && first < newCells.length) newCells[first] = colorIdx;
-    const last = y1 * c.cols + x1;
-    if (last >= 0 && last < newCells.length) newCells[last] = colorIdx;
+    for (const cell of getLineCells(x0, y0, x1, y1)) {
+      const idx = cell.y * c.cols + cell.x;
+      if (idx >= 0 && idx < newCells.length) newCells[idx] = colorIdx;
+    }
     return newCells;
   };
 
   const drawRect = (c: Chart, x0: number, y0: number, x1: number, y1: number, colorIdx: number) => {
     const newCells = currentCellsRef.current ? new Uint16Array(currentCellsRef.current) : new Uint16Array(c.cells);
-    const minX = Math.min(x0, x1);
-    const maxX = Math.max(x0, x1);
-    const minY = Math.min(y0, y1);
-    const maxY = Math.max(y0, y1);
-
-    for (let x = minX; x <= maxX; x++) {
-      const top = minY * c.cols + x;
-      if (top >= 0 && top < newCells.length) newCells[top] = colorIdx;
-      const bottom = maxY * c.cols + x;
-      if (bottom >= 0 && bottom < newCells.length) newCells[bottom] = colorIdx;
-    }
-    for (let y = minY; y <= maxY; y++) {
-      const left = y * c.cols + minX;
-      if (left >= 0 && left < newCells.length) newCells[left] = colorIdx;
-      const right = y * c.cols + maxX;
-      if (right >= 0 && right < newCells.length) newCells[right] = colorIdx;
+    for (const cell of getRectCells(x0, y0, x1, y1)) {
+      const idx = cell.y * c.cols + cell.x;
+      if (idx >= 0 && idx < newCells.length) newCells[idx] = colorIdx;
     }
     return newCells;
   };
@@ -304,7 +337,7 @@ export default function CanvasGrid() {
       useChartStore.getState().updateChart(c.id, (ch) => ({ ...ch, cells: newCells }));
       drawingRef.current = false;
     } else if (tool === 'line' || tool === 'rect') {
-      previewRef.current = { x: cell.x, y: cell.y, w: 1, h: 1 };
+      previewCellsRef.current = [{ x: cell.x, y: cell.y }];
       needsRedrawRef.current = true;
     }
   };
@@ -342,20 +375,10 @@ export default function CanvasGrid() {
         useChartStore.getState().updateChart(c.id, (ch) => ({ ...ch, cells: newCells }));
       }
     } else if (tool === 'line') {
-      previewRef.current = {
-        x: Math.min(startCellRef.current.x, cell.x),
-        y: Math.min(startCellRef.current.y, cell.y),
-        w: Math.abs(cell.x - startCellRef.current.x) + 1,
-        h: Math.abs(cell.y - startCellRef.current.y) + 1,
-      };
+      previewCellsRef.current = getLineCells(startCellRef.current.x, startCellRef.current.y, cell.x, cell.y);
       needsRedrawRef.current = true;
     } else if (tool === 'rect') {
-      previewRef.current = {
-        x: Math.min(startCellRef.current.x, cell.x),
-        y: Math.min(startCellRef.current.y, cell.y),
-        w: Math.abs(cell.x - startCellRef.current.x) + 1,
-        h: Math.abs(cell.y - startCellRef.current.y) + 1,
-      };
+      previewCellsRef.current = getRectCells(startCellRef.current.x, startCellRef.current.y, cell.x, cell.y);
       needsRedrawRef.current = true;
     }
   };
@@ -377,7 +400,7 @@ export default function CanvasGrid() {
     if (!cell) {
       drawingRef.current = false;
       startCellRef.current = null;
-      previewRef.current = null;
+      previewCellsRef.current = [];
       needsRedrawRef.current = true;
       return;
     }
@@ -392,7 +415,7 @@ export default function CanvasGrid() {
 
     drawingRef.current = false;
     startCellRef.current = null;
-    previewRef.current = null;
+    previewCellsRef.current = [];
     currentCellsRef.current = null;
     needsRedrawRef.current = true;
   };
